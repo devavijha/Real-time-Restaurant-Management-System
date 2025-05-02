@@ -1,248 +1,247 @@
-import { createContext, useState, useContext, ReactNode, useEffect } from 'react';
-import { v4 as uuidv4 } from 'uuid';
-import { Order, OrderItem, OrderStatus, OrderContextType } from '../types/order';
-import { useRestaurant } from './RestaurantContext';
-import { simulateWebSocket } from '../services/mockWebSocket';
-import toast from 'react-hot-toast';
+import {
+  createContext,
+  useState,
+  useContext,
+  ReactNode,
+  useEffect,
+} from "react";
+import { v4 as uuidv4 } from "uuid";
+import {
+  Order,
+  OrderItem,
+  OrderStatus,
+  OrderContextType,
+} from "../types/order";
+import { useRestaurant } from "./RestaurantContext";
+import toast from "react-hot-toast";
+
+// Constants for localStorage keys
+const STORAGE_KEY_ORDERS = "restaurantApp_orders";
 
 const OrderContext = createContext<OrderContextType | null>(null);
 
 export const useOrder = () => {
   const context = useContext(OrderContext);
   if (!context) {
-    throw new Error('useOrder must be used within an OrderProvider');
+    throw new Error("useOrder must be used within an OrderProvider");
   }
   return context;
 };
 
 export const OrderProvider = ({ children }: { children: ReactNode }) => {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const { tables, updateTableStatus } = useRestaurant();
-
-  useEffect(() => {
-    // Setup mock WebSocket for real-time updates
-    const unsubscribe = simulateWebSocket<Order[]>('orders', (updatedOrders) => {
-      setOrders(updatedOrders);
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  const getOrdersByTable = (tableId: string) => {
-    return orders.filter(order => order.tableId === tableId);
-  };
-
-  const getOrderById = (id: string) => {
-    return orders.find(order => order.id === id);
-  };
-
-  const calculateTotalAmount = (items: OrderItem[]) => {
-    return items.reduce((total, item) => {
-      let itemTotal = item.price * item.quantity;
-      
-      // Add any modifier costs
-      if (item.modifiers) {
-        item.modifiers.forEach(modifier => {
-          modifier.options.forEach(option => {
-            itemTotal += option.price * item.quantity;
-          });
-        });
+  // Initialize state from localStorage or empty array
+  const [orders, setOrders] = useState<Order[]>(() => {
+    const savedOrders = localStorage.getItem(STORAGE_KEY_ORDERS);
+    if (savedOrders) {
+      try {
+        const parsed = JSON.parse(savedOrders);
+        return parsed.map((order: any) => ({
+          ...order,
+          createdAt: new Date(order.createdAt),
+          updatedAt: new Date(order.updatedAt),
+        }));
+      } catch {
+        return [];
       }
-      
-      return total + itemTotal;
-    }, 0);
-  };
-
-  const createOrder = (tableId: string, items: Omit<OrderItem, 'id' | 'status'>[]) => {
-    const table = tables.find(t => t.id === tableId);
-    
-    if (!table) {
-      throw new Error(`Table with ID ${tableId} not found`);
     }
-    
-    const orderItems: OrderItem[] = items.map(item => ({
+    return [];
+  });
+
+  const { updateTableStatus } = useRestaurant();
+
+  // Persist to localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(orders));
+  }, [orders]);
+
+  const getOrdersByTable = (tableId: string) =>
+    orders.filter((o) => o.tableId === tableId);
+
+  const getOrderById = (id: string) => orders.find((o) => o.id === id);
+
+  const calculateTotalAmount = (items: OrderItem[]) =>
+    items.reduce((sum, item) => {
+      let itemTotal = item.price * item.quantity;
+      if (item.modifiers) {
+        item.modifiers.forEach((mod) =>
+          mod.options.forEach((opt) => {
+            itemTotal += opt.price * item.quantity;
+          })
+        );
+      }
+      return sum + itemTotal;
+    }, 0);
+
+  const createOrder = (
+    tableId: string,
+    items: Omit<OrderItem, "id" | "status">[]
+  ) => {
+    const orderItems: OrderItem[] = items.map((item) => ({
       ...item,
       id: uuidv4(),
-      status: 'pending'
+      status: "pending",
     }));
-    
+
     const newOrder: Order = {
       id: uuidv4(),
       tableId,
-      tableNumber: table.number,
+      tableNumber: parseInt(tableId.split("-").pop() || "0", 10),
       items: orderItems,
-      status: 'pending',
+      status: "pending",
       createdAt: new Date(),
       updatedAt: new Date(),
-      totalAmount: calculateTotalAmount(orderItems)
+      totalAmount: calculateTotalAmount(orderItems),
     };
-    
-    setOrders([...orders, newOrder]);
-    
-    // Update table status
-    updateTableStatus(tableId, 'occupied');
-    
-    // Notify
-    toast.success('Order created successfully');
-    
+
+    setOrders((prev) => [...prev, newOrder]);
+    updateTableStatus(tableId, "occupied");
+    toast.success("Order created successfully");
     return newOrder;
   };
 
   const updateOrderStatus = (orderId: string, status: OrderStatus) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
-        // Update all items to match the order status
-        const updatedItems = order.items.map(item => ({
-          ...item,
-          status
-        }));
-        
-        return {
-          ...order,
-          status,
-          items: updatedItems,
-          updatedAt: new Date()
-        };
-      }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
-    
-    // If order is completed, update table status if this was the last active order
-    const completedOrder = updatedOrders.find(o => o.id === orderId);
-    if (completedOrder && (status === 'completed' || status === 'cancelled')) {
-      const hasActiveOrders = updatedOrders.some(o => 
-        o.tableId === completedOrder.tableId && 
-        o.id !== orderId && 
-        !['completed', 'cancelled'].includes(o.status)
+    setOrders((prev) =>
+      prev.map((order) =>
+        order.id === orderId
+          ? {
+              ...order,
+              status,
+              items: order.items.map((i) => ({ ...i, status })),
+              updatedAt: new Date(),
+            }
+          : order
+      )
+    );
+
+    // if completed/cancelled, free table if no other active orders
+    const justUpdated = getOrderById(orderId);
+    if (justUpdated && ["completed", "cancelled"].includes(status)) {
+      const others = orders.filter(
+        (o) =>
+          o.tableId === justUpdated.tableId &&
+          o.id !== orderId &&
+          !["completed", "cancelled"].includes(o.status)
       );
-      
-      if (!hasActiveOrders) {
-        updateTableStatus(completedOrder.tableId, 'available');
+      if (others.length === 0) {
+        updateTableStatus(justUpdated.tableId, "available");
       }
     }
-    
+
     toast.success(`Order status updated to ${status}`);
   };
 
-  const updateOrderItemStatus = (orderId: string, itemId: string, status: OrderStatus) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
-        const updatedItems = order.items.map(item => 
+  const updateOrderItemStatus = (
+    orderId: string,
+    itemId: string,
+    status: OrderStatus
+  ) => {
+    setOrders((prev) =>
+      prev.map((order) => {
+        if (order.id !== orderId) return order;
+        const updatedItems = order.items.map((item) =>
           item.id === itemId ? { ...item, status } : item
         );
-        
-        // Check if all items have the same status
-        const allItemsHaveSameStatus = updatedItems.every(item => item.status === status);
-        
+        const allSame = updatedItems.every((i) => i.status === status);
         return {
           ...order,
-          status: allItemsHaveSameStatus ? status : order.status,
           items: updatedItems,
-          updatedAt: new Date()
+          status: allSame ? status : order.status,
+          updatedAt: new Date(),
         };
-      }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
+      })
+    );
     toast.success(`Item status updated to ${status}`);
   };
 
-  const addItemToOrder = (orderId: string, item: Omit<OrderItem, 'id' | 'status'>) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
+  const addItemToOrder = (
+    orderId: string,
+    item: Omit<OrderItem, "id" | "status">
+  ) => {
+    setOrders((prev) =>
+      prev.map((order) => {
+        if (order.id !== orderId) return order;
         const newItem: OrderItem = {
           ...item,
           id: uuidv4(),
-          status: 'pending'
+          status: "pending",
         };
-        
         const updatedItems = [...order.items, newItem];
-        
         return {
           ...order,
           items: updatedItems,
           totalAmount: calculateTotalAmount(updatedItems),
-          updatedAt: new Date()
+          updatedAt: new Date(),
         };
-      }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
-    toast.success('Item added to order');
+      })
+    );
+    toast.success("Item added to order");
   };
 
   const removeItemFromOrder = (orderId: string, itemId: string) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
-        const updatedItems = order.items.filter(item => item.id !== itemId);
-        
+    setOrders((prev) =>
+      prev.map((order) => {
+        if (order.id !== orderId) return order;
+        const updatedItems = order.items.filter((i) => i.id !== itemId);
         return {
           ...order,
           items: updatedItems,
           totalAmount: calculateTotalAmount(updatedItems),
-          updatedAt: new Date()
+          updatedAt: new Date(),
         };
-      }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
-    toast.success('Item removed from order');
+      })
+    );
+    toast.success("Item removed from order");
   };
 
-  const completeOrder = (orderId: string, paymentDetails: { amount: number; splitBill?: boolean }) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
-        // Calculate loyalty points (1 point per $10 spent)
-        const loyaltyPointsEarned = Math.floor(paymentDetails.amount / 10);
-        
+  const completeOrder = (
+    orderId: string,
+    paymentDetails: { amount: number; splitBill?: boolean }
+  ) => {
+    setOrders((prev) =>
+      prev.map((order) => {
+        if (order.id !== orderId) return order;
+        const loyaltyPoints = Math.floor(paymentDetails.amount / 10);
         return {
           ...order,
-          status: 'completed',
+          status: "completed",
           paidAmount: paymentDetails.amount,
-          splitBill: paymentDetails.splitBill || false,
-          loyaltyPointsEarned,
-          updatedAt: new Date()
+          splitBill: paymentDetails.splitBill ?? false,
+          loyaltyPointsEarned: loyaltyPoints,
+          updatedAt: new Date(),
         };
-      }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
-    
-    // Check if table has no more active orders
-    const completedOrder = updatedOrders.find(o => o.id === orderId);
-    if (completedOrder) {
-      const hasActiveOrders = updatedOrders.some(o => 
-        o.tableId === completedOrder.tableId && 
-        o.id !== orderId && 
-        !['completed', 'cancelled'].includes(o.status)
+      })
+    );
+
+    // free table if no other active orders
+    const justDone = getOrderById(orderId);
+    if (justDone) {
+      const others = orders.filter(
+        (o) =>
+          o.tableId === justDone.tableId &&
+          o.id !== orderId &&
+          !["completed", "cancelled"].includes(o.status)
       );
-      
-      if (!hasActiveOrders) {
-        updateTableStatus(completedOrder.tableId, 'available');
+      if (others.length === 0) {
+        updateTableStatus(justDone.tableId, "available");
       }
     }
-    
-    toast.success('Payment completed');
+
+    toast.success("Payment completed");
   };
 
-  const provideFeedback = (orderId: string, feedback: { rating: number; comment?: string }) => {
-    const updatedOrders = orders.map(order => 
-      order.id === orderId ? { ...order, feedback } : order
+  const provideFeedback = (
+    orderId: string,
+    feedback: { rating: number; comment?: string }
+  ) => {
+    setOrders((prev) =>
+      prev.map((order) =>
+        order.id === orderId ? { ...order, feedback } : order
+      )
     );
-    
-    setOrders(updatedOrders);
-    toast.success('Thank you for your feedback!');
+    toast.success("Thank you for your feedback!");
   };
 
-  const value = {
+  const value: OrderContextType = {
     orders,
     getOrdersByTable,
     getOrderById,
@@ -252,8 +251,10 @@ export const OrderProvider = ({ children }: { children: ReactNode }) => {
     addItemToOrder,
     removeItemFromOrder,
     completeOrder,
-    provideFeedback
+    provideFeedback,
   };
 
-  return <OrderContext.Provider value={value}>{children}</OrderContext.Provider>;
+  return (
+    <OrderContext.Provider value={value}>{children}</OrderContext.Provider>
+  );
 };
