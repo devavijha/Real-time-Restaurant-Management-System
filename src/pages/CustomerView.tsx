@@ -214,7 +214,8 @@ const CustomerView = ({ tableId, onLogout }: CustomerViewProps) => {
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center">
             <h1 className="text-xl font-semibold text-gray-800">
-              {table ? `Table ${table.number}` : "Loading..."}
+              {/* {table ? `Table ${table.number}` : "Loading..."} */}
+              Customer Table
             </h1>
           </div>
 
