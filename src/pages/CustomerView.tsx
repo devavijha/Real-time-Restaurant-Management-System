@@ -3,6 +3,7 @@ import { useRestaurant } from "../contexts/RestaurantContext";
 import { useOrder } from "../contexts/OrderContext";
 import { MenuItem, MenuCategory } from "../types/restaurant";
 import { OrderItem, OrderStatus } from "../types/order";
+import toast from "react-hot-toast";
 import {
   X,
   ShoppingCart,
@@ -19,6 +20,7 @@ import OrderStatusBadge from "../components/shared/OrderStatusBadge";
 import CartItem from "../components/customer/CartItem";
 import FeedbackForm from "../components/customer/FeedbackForm";
 import PaymentModal from "../components/customer/PaymentModal";
+import OrderTimer from "../components/customer/OrderTimer";
 
 interface CustomerViewProps {
   tableId: string;
@@ -89,8 +91,43 @@ const CustomerView = ({ tableId, onLogout }: CustomerViewProps) => {
 
   // Listen for changes to the orders array from context
   useEffect(() => {
+    // Store previous order statuses to detect changes
+    const prevActiveOrders = activeOrders;
     updateOrders();
+    
+    // Check for status changes in orders and show notifications
+    if (prevActiveOrders.length > 0) {
+      activeOrders.forEach(order => {
+        const prevOrder = prevActiveOrders.find(o => o.id === order.id);
+        if (prevOrder && prevOrder.status !== order.status) {
+          // Show status change notification
+          switch (order.status) {
+            case 'preparing':
+              toast('The kitchen is now preparing your food!', {
+                icon: '👨‍🍳',
+                duration: 3000,
+              });
+              break;
+            case 'ready':
+              toast('Your food is ready! It will be served shortly.', {
+                icon: '🍽️',
+                duration: 4000,
+              });
+              break;
+            case 'served':
+              toast('Your food has been served. Enjoy your meal!', {
+                icon: '😋',
+                duration: 3000,
+              });
+              break;
+            default:
+              break;
+          }
+        }
+      });
+    }
   }, [orders, tableId]);
+
 
   const updateOrders = () => {
     const tableOrders = getOrdersByTable(tableId);
@@ -178,6 +215,9 @@ const CustomerView = ({ tableId, onLogout }: CustomerViewProps) => {
 
     // Update orders list
     updateOrders();
+
+    // Show notification
+    toast.success("Order placed successfully! You can track your food preparation status.");
 
     // Switch to orders view
     setViewMode("orders");
@@ -395,6 +435,12 @@ const CustomerView = ({ tableId, onLogout }: CustomerViewProps) => {
                           <div className="flex items-center mt-1">
                             <OrderStatusBadge status={order.status} />
                           </div>
+                          <OrderTimer 
+                            orderId={order.id}
+                            orderStatus={order.status}
+                            createdAt={order.createdAt}
+                            estimatedTime={15}
+                          />
                         </div>
                         <span className="font-semibold text-lg">
                           ${order.totalAmount.toFixed(2)}
@@ -470,6 +516,12 @@ const CustomerView = ({ tableId, onLogout }: CustomerViewProps) => {
                           <div className="flex items-center mt-1">
                             <OrderStatusBadge status={order.status} />
                           </div>
+                          <OrderTimer 
+                            orderId={order.id}
+                            orderStatus={order.status}
+                            createdAt={order.createdAt}
+                            estimatedTime={15}
+                          />
                         </div>
                         <span className="font-semibold text-lg">
                           ${order.totalAmount.toFixed(2)}
